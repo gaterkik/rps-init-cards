@@ -30,6 +30,7 @@ HIDE_WINDOW = 0x08000000
 
 
 settings = {
+    "host": "127.0.0.1",
     "port": 2325,
     "user": "Server",
     "password": "",
@@ -109,7 +110,7 @@ def run_ssh(remote_command, input_text=None, timeout=120):
         "-hostkey", settings["host_key"],
         "-P", str(settings["port"]),
         "-pw", settings["password"],
-        settings["user"] + "@" + SSH_HOST,
+        settings["user"] + "@" + settings["host"],
         remote_command,
     ]
     return subprocess.run(full_command, input=input_text, capture_output=True,
@@ -119,30 +120,37 @@ def run_ssh(remote_command, input_text=None, timeout=120):
 
 def find_host_key():
     probe_command = [
-        find_plink(), "-v",
+        find_plink(), "-v", "-batch",
         "-P", str(settings["port"]),
         "-pw", settings["password"],
-        settings["user"] + "@" + SSH_HOST,
+        settings["user"] + "@" + settings["host"],
         "exit",
     ]
     try:
-        result = subprocess.run(probe_command, input="y\n", capture_output=True,
-                                text=True, timeout=25, creationflags=HIDE_WINDOW,
+        result = subprocess.run(probe_command, capture_output=True,
+                                text=True, timeout=15, creationflags=HIDE_WINDOW,
                                 errors="replace")
-    except subprocess.TimeoutExpired:
-        return "", "сервер не отвечает"
-    output = (result.stdout or "") + (result.stderr or "")
+        output = (result.stdout or "") + (result.stderr or "")
+    except subprocess.TimeoutExpired as e:
+        output = (e.stdout or "") + (e.stderr or "")
+        place = output.find("SHA256:")
+        if place >= 0:
+            return output[place:].split()[0], ""
+        return "", "сервер не отвечает (тайм-аут 15с)\n--- Подробности ---\n" + output.strip() + "\n-------------------------------"
+    
     place = output.find("SHA256:")
     if place >= 0:
         return output[place:].split()[0], ""
+    
+    details = "\n--- Подробности подключения ---\n" + output.strip() + "\n-------------------------------"
     lowered = output.lower()
     if "closed" in lowered:
-        return "", "сервер закрыл соединение"
+        return "", "сервер закрыл соединение" + details
     if "refused" in lowered:
-        return "", "порт закрыт, проброс не поднят"
+        return "", "порт закрыт, проброс не поднят" + details
     if "denied" in lowered or "password" in lowered:
-        return "", "логин или пароль не подошли"
-    return "", "нет связи"
+        return "", "логин или пароль не подошли" + details
+    return "", "нет связи" + details
 
 
 def run_sql(query, timeout=180):
@@ -414,25 +422,29 @@ def write_to_log(card_number, card_uid):
 
 def load_saved_settings():
     path = os.path.join(program_folder(), "settings.txt")
+    host = "127.0.0.1"
     port = "2325"
     user = "Server"
     try:
         with open(path, encoding="utf-8") as settings_file:
             for line in settings_file:
                 line = line.strip()
+                if line.startswith("host="):
+                    host = line[5:]
                 if line.startswith("port="):
                     port = line[5:]
                 if line.startswith("user="):
                     user = line[5:]
     except Exception:
         pass
-    return port, user
+    return host, port, user
 
 
 def save_settings():
     path = os.path.join(program_folder(), "settings.txt")
     try:
         with open(path, "w", encoding="utf-8") as settings_file:
+            settings_file.write("host=" + settings["host"] + "\n")
             settings_file.write("port=" + str(settings["port"]) + "\n")
             settings_file.write("user=" + settings["user"] + "\n")
     except Exception:
@@ -440,7 +452,12 @@ def save_settings():
 
 
 def ask_connection_settings():
-    saved_port, saved_user = load_saved_settings()
+    saved_host, saved_port, saved_user = load_saved_settings()
+
+    host = input("адрес сервера [" + saved_host + "]: ").strip()
+    if host == "":
+        host = saved_host
+    settings["host"] = host
 
     port = input("порт [" + saved_port + "]: ").strip()
     if port == "":
@@ -464,12 +481,7 @@ def ask_connection_settings():
     settings["password"] = password
 
 
-def ask_object_key():
-    answer = input("ключ карт: enter - взять из базы, или введите вручную (12 знаков): ").strip().lower()
-    return answer
-
-
-def connect_to_server(manual_key):
+def connect_to_server():
     print("")
     print("связь...", end=" ", flush=True)
 
@@ -484,12 +496,23 @@ def connect_to_server(manual_key):
         return False
     print("ок")
 
-    if manual_key != "":
-        settings["object_key"] = manual_key
+    key_from_database = read_object_key_from_database()
+    
+    if key_is_valid(key_from_database):
+        print("ключ в базе: " + key_from_database)
+        answer = input("нажмите enter чтобы использовать его, или введите другой вручную (12 знаков): ").strip().lower()
     else:
-        key_from_database = read_object_key_from_database()
+        print("не смог достать ключ объекта из базы")
+        answer = input("введите ключ вручную (12 знаков): ").strip().lower()
+    
+    if answer != "":
+        if not key_is_valid(answer):
+            print("ключ должен быть 12 знаков (0-9, a-f)")
+            return False
+        settings["object_key"] = answer
+    else:
         if not key_is_valid(key_from_database):
-            print("не смог достать ключ объекта из базы")
+            print("ключ не задан")
             return False
         settings["object_key"] = key_from_database
 
@@ -676,12 +699,7 @@ def main():
         print("пока")
         return
 
-    manual_key = ask_object_key()
-    if manual_key != "" and not key_is_valid(manual_key):
-        print("ключ должен быть 12 знаков (0-9, a-f)")
-        return
-
-    if not connect_to_server(manual_key):
+    if not connect_to_server():
         return
     save_settings()
 
