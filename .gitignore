@@ -1,0 +1,30 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.bak
+
+# PyInstaller / Build
+build/
+dist/
+*.spec.bak
+
+# Logs and CSV files
+*.csv
+*.log
+
+# Temp & scratch scripts
+diag_one_card.py
+monitor_live.py
+parse_ole.py
+scratch_search.py
+search_bing.py
+revert.py
+rps_cards_v1.0.py
+rps_cards_new.spec
+ext.py
+communication protocol.doc
+strings.txt
+
+# Local settings
+settings.txt
